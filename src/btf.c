@@ -5053,10 +5053,18 @@ static int btf_compare_offs(const void *o1, const void *o2)
 
 static inline __u32 btf_get_mapped_type(struct btf *btf, __u32 *maps, __u32 type)
 {
-	if (type == 0 || type < btf->start_id)
+	if (type < btf->start_id)
 		return type;
 
-	return maps[type - 1];
+#if 0
+	if (type > btf->nr_types) {
+		fprintf(stderr, "type is %u, nr_types: %d, start_id: %d\n", type, btf->nr_types,
+			btf->start_id);
+		//abort();
+	}
+#endif
+
+	return maps[type - btf->start_id] + btf->start_id;
 }
 
 int btf__sort_by_name(struct btf *btf)
@@ -5124,7 +5132,7 @@ int btf__sort_by_name(struct btf *btf)
 			goto err_out;
 		}
 
-		maps[found_offs - btf->type_offs] = i + 1;
+		maps[found_offs - btf->type_offs] = i;
 	}
 #endif
 
