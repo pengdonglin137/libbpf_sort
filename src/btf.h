@@ -231,6 +231,8 @@ struct btf_dedup_opts {
 
 LIBBPF_API int btf__dedup(struct btf *btf, const struct btf_dedup_opts *opts);
 
+LIBBPF_API int btf__sort_by_name(struct btf *btf);
+
 struct btf_dump;
 
 struct btf_dump_opts {
