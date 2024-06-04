@@ -5066,6 +5066,9 @@ int btf__sort_by_name(struct btf *btf)
 	int i, j, k, type_cnt, ret, type_size;
 	__u32 data_size;
 
+	if (!btf_is_modifiable(btf))
+		return 0;
+
 	type_cnt = btf->nr_types;
 	data_size = btf->type_offs_cap * sizeof(*new_type_offs);
 	ret = 0;
