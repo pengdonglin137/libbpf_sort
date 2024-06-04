@@ -5036,7 +5036,6 @@ static int btf_compare_type_name(const void *a, const void *b, void *priv)
 
 	bta = (struct btf_type *)(btf->types_data + ta);
 	btb = (struct btf_type *)(btf->types_data + tb);
-
 	na = btf__str_by_offset(btf, bta->name_off);
 	nb = btf__str_by_offset(btf, btb->name_off);
 
@@ -5055,29 +5054,20 @@ static inline __u32 btf_get_mapped_type(struct btf *btf, __u32 *maps, __u32 type
 {
 	if (type < btf->start_id)
 		return type;
-
-#if 0
-	if (type > btf->nr_types) {
-		fprintf(stderr, "type is %u, nr_types: %d, start_id: %d\n", type, btf->nr_types,
-			btf->start_id);
-		//abort();
-	}
-#endif
-
 	return maps[type - btf->start_id] + btf->start_id;
 }
 
 int btf__sort_by_name(struct btf *btf)
 {
-	struct btf_header *hdr = btf->hdr;
 	struct btf_type *bt;
-	__u32 *new_type_offs = NULL, *maps = NULL;
-	void *new_types_data = NULL, *loc_data = NULL;
+	__u32 *new_type_offs = NULL, *new_type_offs_noname = NULL;
+	__u32 *maps = NULL, *found_offs;
+	void *new_types_data = NULL, *loc_data;
+	int i, j, k, type_cnt, ret, type_size;
 	__u32 data_size;
-	int i, j, type_cnt, type_cnt_name, ret, type_size;
 
 	type_cnt = btf->nr_types;
-	data_size = type_cnt * sizeof(*new_type_offs);
+	data_size = btf->type_offs_cap * sizeof(*new_type_offs);
 	ret = 0;
 
 	maps = (__u32 *)malloc(type_cnt * sizeof(__u32));
@@ -5090,43 +5080,39 @@ int btf__sort_by_name(struct btf *btf)
 		goto err_out;
 	}
 
-	j = 0;
-	for (i = 0; i < type_cnt; i++) {
+	new_type_offs_noname = (__u32 *)malloc(data_size);
+	if (!new_type_offs_noname) {
+		ret = -ENOMEM;
+		goto err_out;
+	}
+
+	new_types_data = malloc(btf->types_data_cap);
+	if (!new_types_data) {
+		ret = -ENOMEM;
+		goto err_out;
+	}
+
+	memset(new_type_offs, 0, data_size);
+
+	for (i = 0, j = 0, k = 0; i < type_cnt; i++) {
+		const char *name;
+
 		bt = (struct btf_type *)(btf->types_data + btf->type_offs[i]);
-		if (bt->name_off)
+		name = btf__str_by_offset(btf, bt->name_off);
+		if (!name || !name[0])
+			new_type_offs_noname[k++] = btf->type_offs[i];
+		else
 			new_type_offs[j++] = btf->type_offs[i];
 	}
 
-	type_cnt_name = j;
-	//printf("type_cnt_name: %d\n", j);
+	memmove(new_type_offs + j, new_type_offs_noname, sizeof(__u32) * k);
+
+	qsort_r(new_type_offs, j, sizeof(*new_type_offs),
+		btf_compare_type_name, btf);
 
 	for (i = 0; i < type_cnt; i++) {
-		bt = (struct btf_type *)(btf->types_data + btf->type_offs[i]);
-		if (!bt->name_off)
-			new_type_offs[j++] = btf->type_offs[i];
-	}
-
-	qsort_r(new_type_offs, type_cnt_name, sizeof(*new_type_offs), btf_compare_type_name, btf);
-
-#if 0
-	for (i = 0; i < type_cnt; i++) {
-		for (j = 0; j < type_cnt; j++) {
-			if (btf->type_offs[i] == new_type_offs[j])
-				break;
-		}
-
-		if (j >= type_cnt) {
-			ret = -EINVAL;
-			goto err_out;
-		}
-
-		maps[i] = j+1;
-	}
-#else
-	for (i = 0; i < type_cnt; i++) {
-		__u32 *found_offs;
-		found_offs = bsearch(&new_type_offs[i], btf->type_offs, type_cnt, sizeof(__u32),
-			btf_compare_offs);
+		found_offs = bsearch(&new_type_offs[i], btf->type_offs, type_cnt,
+					sizeof(__u32), btf_compare_offs);
 		if (!found_offs) {
 			ret = -EINVAL;
 			goto err_out;
@@ -5134,29 +5120,17 @@ int btf__sort_by_name(struct btf *btf)
 
 		maps[found_offs - btf->type_offs] = i;
 	}
-#endif
-
-#if 0
-	for (i = 0; i < type_cnt; i++) {
-		struct btf_type *bt, *bt2;
-
-		bt = (struct btf_type *)(btf->types_data + new_type_offs[i]);
-		bt2 = (struct btf_type *)(btf->types_data + btf->type_offs[i]);
-		printf("#%d map: %d n: %s  n2: %s\n", i, maps[i], bt->name_off ? btf__str_by_offset(btf, bt->name_off) : "null",
-			bt2->name_off ? btf__str_by_offset(btf, bt2->name_off) : "null");
-	}
-#endif
-
-	new_types_data = malloc(hdr->type_len);
-	if (!new_types_data) {
-		ret = -ENOMEM;
-		goto err_out;
-	}
 
 	loc_data = new_types_data;
 	for (i = 0; i < type_cnt; i++, loc_data += type_size) {
 		bt = (struct btf_type *)(btf->types_data + new_type_offs[i]);
+
 		type_size = btf_type_size(bt);
+		if (type_size < 0) {
+			ret = libbpf_err(type_size);
+			goto err_out;
+		}
+
 		memcpy(loc_data, bt, type_size);
 
 		bt = (struct btf_type *)loc_data;
@@ -5213,34 +5187,22 @@ int btf__sort_by_name(struct btf *btf)
 		}
 	}
 
-	if (btf->type_offs) {
-		free(btf->type_offs);
-		btf->type_offs = new_type_offs;
-	}
-
-	if (btf->types_data) {
-		free(btf->types_data);
-		btf->types_data = new_types_data;
-	}
-
+	free(btf->type_offs);
+	btf->type_offs = new_type_offs;
+	free(btf->types_data);
+	btf->types_data = new_types_data;
 	free(maps);
+	free(new_type_offs_noname);
 	return 0;
 
 err_out:
-	if (maps) {
+	if (maps)
 		free(maps);
-		maps = NULL;
-	}
-
-	if (new_type_offs) {
+	if (new_type_offs)
 		free(new_type_offs);
-		new_type_offs = NULL;
-	}
-
-	if (new_types_data) {
+	if (new_type_offs_noname)
+		free(new_type_offs_noname);
+	if (new_types_data)
 		free(new_types_data);
-		new_types_data = NULL;
-	}
-
 	return ret;
 }
